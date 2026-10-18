@@ -1,0 +1,21 @@
+# Defense against accidental additions; this does not protect already tracked files.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*service-account*.json
+*credentials*.json
+*.log
+*.dump
+*.heapprofile
+*.heapsnapshot
+.DS_Store
+Thumbs.db
+node_modules/
+.venv/
+dist/
+build/

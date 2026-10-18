@@ -1,0 +1,29 @@
+name: Documentation question or correction
+description: Non-confidential feedback on the public architecture.
+title: "[Docs] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Public issues are visible to everyone. Do not include secrets, customer
+        data, unpublished implementation details, or sensitive security reports.
+        For sensitive concerns, follow SECURITY.md.
+  - type: input
+    id: section
+    attributes:
+      label: Affected section
+      description: Identify the document and heading.
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Question or correction
+      description: Explain the concern using only information intended for public disclosure.
+    validations:
+      required: true
+  - type: textarea
+    id: sources
+    attributes:
+      label: Public supporting sources
+      description: Optional official documentation or public standards.
