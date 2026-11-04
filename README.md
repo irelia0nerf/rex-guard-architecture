@@ -29,6 +29,8 @@ This composition is referred to here as **Auditable Trust Infrastructure — ATI
 
 **Central invariant:** an AI-originated proposal must not reach a protected side effect without operation-specific authority enforced by a boundary the caller cannot bypass.
 
+**Semantic-integrity invariant (proposed):** passing a signature check and a policy check is insufficient if the target executes a different real-world operation from the one authorized. The institution must define and verify a stable binding between the approved operation, its resolved real-world referents, the executor's concrete instruction, and the target's effect. An opaque reference, a valid signature, or a successful API call does not establish that equivalence on its own.
+
 ## Architecture
 
 ```mermaid
@@ -118,7 +120,9 @@ The authority evaluator receives a normalized proposal, authenticated identities
 
 The evaluator must not invoke an LLM to decide authority. A probabilistic risk signal can be a versioned input to a deterministic rule, but cannot independently create delegation or privilege.
 
-Missing policy, expired delegation, unavailable mandatory context, invalid identity, or excessive clock uncertainty blocks new authorization. Cached policy is usable only while its declared validity and freshness remain satisfied.
+Missing policy, expired delegation, unavailable mandatory context, invalid identity, or excessive clock uncertainty blocks new authorization. Cached policy is usable only while its declared validity and freshness remain satisfied. Validity alone does not prevent rollback to an older but still time-valid policy: deployments requiring anti-rollback must enforce a monotonic, authenticated policy/revocation epoch or equivalent authoritative version floor. Clock uncertainty, time-source provenance, and revocation race boundaries belong in the evaluation contract.
+
+Authorization may also require **sequence-aware constraints**. Individually permitted steps can combine into an unauthorized outcome (for example, creating a beneficiary and then paying it, or structuring multiple transfers beneath per-operation thresholds). The policy domain must specify which cumulative limits, approval dependencies, and multi-step invariants are enforced transactionally or by an authoritative target; an isolated request-level ALLOW cannot prove global authorization.
 
 ### Capability boundary
 
@@ -136,6 +140,18 @@ A signature protects this binding from undetected modification. It does not make
 Signature verification requires an authenticated trust bundle, an approved algorithm, an authorized key version, and an unambiguous signed representation. A JSON signature profile can use RFC 8785 canonicalization, strict parsing, and explicit domain separation. Duplicate property names must be rejected before parsers silently discard them. [2]
 
 A Google Cloud mapping can use Cloud KMS with `EC_SIGN_P256_SHA256`; verification uses the corresponding public key. Policy validation remains application logic. Key administration, capability signing, and receipt signing should have separate privileges and roles. [3]
+
+### Semantic binding across approval, resolution, and dispatch
+
+The authorized operation is not merely a signed JSON structure. The following are **proposed integration requirements**, not verified implementation properties:
+
+- **Real-world referents:** `beneficiary_ref`, `resource_ref`, and similar opaque identifiers must resolve through an authoritative, versioned or immutable mapping. The binding must identify the actual recipient/resource and relevant target-side account identity, not just a mutable lookup key. If resolution changes between approval and dispatch, revalidate against the approved identity or stop. When the institution cannot establish this guarantee at the target boundary, the route must not claim end-to-end semantic integrity.
+- **Canonical-to-wire equivalence:** define one typed operation contract and a testable mapping to each executor/target protocol. Reject duplicate fields, ambiguous encodings, rounding, currency-scale drift, unsupported precision, and lossy transformations. Verify that the effective target instruction preserves the authorized amount, currency, recipient, purpose, and applicable constraints; a matching hash of an abstract request alone is insufficient.
+- **Approval presentation:** a human approval must bind to the same canonical operation that will be dispatched. The human-readable rendering should be generated from trusted structured fields, with untrusted descriptions clearly separated. Preserve a verifiable binding of what was displayed, the approver's decision, and the authorized operation. Prompt injection must not be allowed to substitute a benign display for different executable parameters.
+
+### Authority facts and signing-oracle resistance
+
+KMS controls access to a signing key; it does not attest that delegation, beneficiary resolution, policy publication, or context facts were truthful. The signing pipeline must distinguish **authenticated fact provenance** from mere possession of a valid signature. Define authoritative sources, fact versions or epochs, integrity and freshness checks, change authorization, and independent validation for privilege-bearing inputs. If mandatory provenance is missing, fail closed on new grants. A correctly signed grant produced from poisoned authority facts is a security failure, not evidence of correct authorization.
 
 ### Single-use is a distributed-state property
 
@@ -205,6 +221,8 @@ Fail-closed controls new admission and dispatch. It cannot undo a transaction th
 
 There is no assumed distributed transaction between the authority journal and an external core. An end-to-end exactly-once claim requires additional target-specific proof.
 
+**Crash-point invariant:** a worker crash, lost acknowledgment, or journal/target race must never turn an ambiguous external effect into a safe-to-retry assumption. `ABORTED` is valid only with conclusive evidence that dispatch could not have caused an effect; otherwise preserve `UNKNOWN` until target-authoritative reconciliation. Test the window after target acceptance but before the executor observes or durably records the response, including concurrent recovery workers.
+
 ## 4. Evidence: prove only what the record supports
 
 ### DecisionReceipt and EffectReceipt
@@ -247,7 +265,9 @@ A signature attributes a declaration to a key under a trust policy. It does not 
 
 Receipts can be incorporated into an ordered Merkle log with signed checkpoints. RFC 9162 supplies a defined construction for leaf/node domain separation and inclusion/consistency proofs; using those algorithms does not make this architecture a Certificate Transparency implementation. [4]
 
-Inclusion proves membership relative to a trusted root. Detecting truncation or conflicting histories requires earlier checkpoints or an independent witness. A root supplied only by the potentially compromised archive is insufficient.
+Inclusion proves membership relative to a trusted root. Detecting truncation or conflicting histories requires earlier checkpoints or an independent witness. A root supplied only by the potentially compromised archive is insufficient. Independent checkpoint retention or witness gossip must also be evaluated against **split-view equivocation**: an archive operator may present two individually valid but inconsistent histories to different auditors.
+
+A signed `ADAPTER_OBSERVATION` receipt attributes an adapter's statement; it does not independently verify a target commit. A compromised adapter and reconciliation logic sharing the same trust source may agree on a false outcome. For claims of committed effect, specify the target-authoritative evidence and its independent validation boundary; otherwise report the observation's limited assurance.
 
 Durable receipt publication precedes checkpoint advancement. Failed signing leaves a pending event, not a published head referencing a missing receipt.
 
@@ -315,8 +335,18 @@ The following are acceptance scenarios for a concrete implementation. **No execu
 | Archive history is truncated | Detection against independently retained checkpoints |
 | Sensitive canary input reaches error and retry paths | No retention outside the declared data profile |
 | Verification runs without network or operational credentials | Cryptographic results are reproducible; unavailable checks remain explicit |
+| Approved opaque beneficiary reference resolves to a different real account before dispatch | Reject or require fresh authorization against the effective target referent; no payment under the stale binding |
+| Evaluator and executor/target interpret encoding, duplicate fields, precision, or currency scale differently | Reject before effect; record the canonical-to-wire discrepancy |
+| Authority-critical delegation, reference mapping, or policy facts are poisoned before a legitimate signing operation | No actionable grant without verified authoritative provenance; the valid key signature does not substitute for fact integrity |
+| A still-time-valid but older permissive policy is presented after a stricter version was activated | Reject rollback below the authenticated policy/revocation version floor |
+| Multiple individually allowed operations violate a cumulative limit or approval sequence | Prevent the aggregate prohibited effect at the appropriate transactional boundary |
+| Approval UI displays parameters that differ from the canonical executable instruction | No effective approval for the mismatched operation |
+| Two auditors receive individually valid but inconsistent archive histories | Detect disagreement through independent checkpoints/witness evidence where that guarantee is claimed |
+| Target accepts an instruction before a worker crashes or loses the response | Preserve UNKNOWN; reconcile authoritatively; no unsafe automatic retry or duplicate effect |
 
 An implementation evaluation should identify build digest, configuration, target contract, load, failure injections, test artifacts, and verification scope. Latency and throughput are measurement outputs, not properties inferred from this diagram.
+
+These additional semantic-integrity scenarios are **proposed adversarial acceptance tests**, not confirmed findings or executed results. The specification must distinguish design intent from observed enforcement in any implementation review.
 
 ## Scope of this public artifact
 
